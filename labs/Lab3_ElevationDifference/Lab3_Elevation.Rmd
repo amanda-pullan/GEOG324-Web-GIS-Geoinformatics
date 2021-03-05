@@ -1,0 +1,163 @@
+---
+title: "GEOG324 Lab 3 - Amanda Pullan"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+The basis of this exercise was to compare two versions of the Shuttle Radar Topography Mission (SRTM) digital elevation model (DEM). This included version 4 of the SRTM data released by the USGS (United States Geological Survey) and an improved, higher-accuracy version known as MERIT (Multi-Error-Removed Improved-Terrain), released by Yamazaki et al. (2017). To visualise the differences, a raster image and a density plot were produced.
+
+To begin, several packages were attached with the `library()` function. These included `raster` for enabling raster images, `sf` to allow for spatial features, `tmap` for its mapping abilities and `tidyverse` for its useful tools in working with datasets.
+
+```{r}
+# load packages
+library(raster)
+library(sf)
+library(tmap)
+library(tidyverse)
+```
+
+The spatial data were loaded using `raster()` for the SRTM DEM files and `st_read()` for the gpkg (GeoPackage) vector data files - one containing regions of New Zealand, and the other with land class information for Canterbury. The region data was filtered to Canterbury and its coordinates were converted to match the DEMs. Then, it was used with the `crop()` and `mask()` functions to trim the DEMs to the Canterbury region.
+
+```{r}
+# create elevation maps of Canterbury region for each DEM
+# some code has been borrowed from lab
+
+# import MERIT SRTM raster of NZ
+srtm_elev <- raster("SRTM_MERIT_NZ.tif")
+
+# import USGS SRTM raster of NZ
+srtm_elev_orig <- raster("SRTM_USGS_NZ.tif")
+
+# import vector data containing NZ regions
+nz_regions <- st_read("regional-council-2020-generalised.gpkg")
+
+# filter data to region of interest
+nz_canterbury <- nz_regions %>% 
+  filter(REGC2020_V1_00_NAME == "Canterbury Region") %>%
+  st_transform(crs = st_crs(srtm_elev))
+
+# create MERIT SRTM of Canterbury
+srtm_canterbury <- srtm_elev %>% 
+                   crop(nz_canterbury) %>%
+                   mask(nz_canterbury)
+
+# create USGS SRTM of Canterbury
+srtm_canterbury_orig <- srtm_elev_orig %>% 
+                        crop(nz_canterbury) %>%
+                        mask(nz_canterbury)
+
+# import vector polygon data for Canterbury landclasses
+canterbury_landclass <- st_read("lcdb-v50-land-cover-database-canterbury.gpkg")
+```
+
+A transect line was then created. First, the latitude and longitude location coordinates of each end were specified and combined using `cbind()`. Then, they were converted to a linestring using `st_linestring()`, adjusted to the SRTM projection with `st_sfc()` and converted to a simple feature object with `st_sf()`.
+
+```{r}
+# create transect line
+pts <- cbind(Lon = c(Tekapo = 170.5111, Hanmer = 172.821), 
+             Lat = c(Tekapo = -43.994, Hanmer = -42.527))
+
+transectLine = pts %>%
+  st_linestring() %>% 
+  st_sfc(crs = projection(srtm_canterbury)) %>% 
+  st_sf()
+```
+
+Next, an image showing the differences in elevation between the two DEMs was created. The elevation values of the original SRTM DEM were subtracted from the adjusted MERIT DEM, which was then mapped using the `tm_shape()` function in combination with `tm_raster()`. The "order" style was chosen as the distribution of the elevation difference was relatively skewed. Then, the transect line was mapped on top by adding another `tm_shape()` with the `tm_lines()` function.
+
+```{r}
+# create raster of difference between SRTMs
+elev_diff <- srtm_canterbury - srtm_canterbury_orig
+
+# map the difference raster
+tm_shape(elev_diff) +
+  tm_raster(style = "order",
+            palette = "RdBu",
+            midpoint = 0,
+            title = "Difference (m)") +
+  tm_layout(legend.position = c("right", "bottom"),
+            frame = FALSE) +
+  tm_shape(transectLine) +              # add a transect line
+  tm_lines(col = "green2", lwd = 3)
+```
+The raster produced showed there were many areas with a large increase or decrease in elevation, with up to 200 metres of difference. The Southern Alps near the Mackenzie region looked to be much higher than originally estimated, whilst forested areas towards the West Coast were much lower. The transect line from Hanmer to Tekapo ran right across the two extremes.
+
+Next, samples of several Canterbury land classes were taken and used to calculate the differences in elevation to compare between land types. The land classes were extracted by using `filter()` with the relevant class ID and random samples taken using `slice_sample()` function. A seed was set to ensure the reproducibility of the plot.
+
+```{r}
+# extracting land classes to new variables
+set.seed(0)
+
+# exotic grassland class sample
+exotic_grass <- canterbury_landclass %>%
+                  filter(Class_2018 == 40) %>%
+                  slice_sample(n = 50)
+
+# built up area (settlement) class sample
+builtup_area <- canterbury_landclass %>%
+                  filter(Class_2018 == 1) %>%
+                  slice_sample(n = 50)
+
+# indigenous forest class sample
+indig_forest <- canterbury_landclass %>%
+                  filter(Class_2018 == 69) %>%
+                  slice_sample(n = 50)
+```
+
+The elevation values for each land type were found by passing the samples to the `raster::extract()` function in combination with the difference raster created earlier. These were piped into the `purrr::map_dfr()` function, which mapped the values into a dataframe.
+
+```{r}
+# extracting the difference in elevation values
+
+# exotic grassland correction difference
+exoticgrass_slope <- elev_diff %>%
+  raster::extract(exotic_grass) %>%
+  purrr::map_dfr(as_tibble, .id = "ID")
+
+# built up area correction difference
+builtuparea_slope <- elev_diff %>%
+  raster::extract(builtup_area) %>%
+  purrr::map_dfr(as_tibble, .id = "ID")
+
+# indigenous forest correction difference
+indigforest_slope <- elev_diff %>%
+  raster::extract(indig_forest) %>%
+  purrr::map_dfr(as_tibble, .id = "ID")
+```
+
+Finally, a density plot was produced, representing the difference in elevation between the original and MERIT DEMs for the land class samples. The `ggplot()` function was used to create the plot and each slope sample was added as a layer using `geom_density()`. A different colour was used to represent each land class, with `xlim()` set to better see the bulk of the data and the titles edited using 'labs()`.
+
+```{r}
+# create density plot of the elevation corrections
+
+ggplot(mapping = aes(x = value)) +
+  geom_density(data = exoticgrass_slope,
+               aes(fill = "Exotic Grasslands"),
+               alpha = 0.25) +
+  geom_density(data = builtuparea_slope,
+               aes(fill = "Built Up Area"),
+               alpha = 0.25) +
+  geom_density(data = indigforest_slope,
+               aes(fill = "Indigenous Forest"),
+               alpha = 0.25) +
+  xlim(-20, 10) +
+  labs(title = "Difference in Elevation for Each Land Class",
+       x = "Elevation (m)",
+       y = "Density",
+       fill = "Land Class")
+```
+
+The density plot shows there is a difference in the distribution of elevation error for the different land classes. Built-up areas had a similar peak in underestimation error with exotic grasslands. This may be due to these land types generally representing flatter areas in Canterbury; according to Yamazaki et al. (2017), flat areas became significantly more accurate in the MERIT version of the SRTM. The indigenous forest followed the opposite trend with height overestimation, which may be due to the tree tops distorting the ability to discern the elevation of the below ground (Yamazaki et al., 2017).
+
+
+
+
+
+
+
+
+
+
+

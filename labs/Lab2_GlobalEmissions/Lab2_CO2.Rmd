@@ -1,0 +1,93 @@
+---
+title: "GEOG324 Lab 2 - Amanda Pullan"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+The goal of this exercise was to visualise the annual CO$_{2}$ emissions from fossil fuels for countries in 2011, as reported by the the UNEP (United Nations Environment Programme). This was combined with spatial data from the "World" dataset, contained in the `spData` package, which enabled the data to be mapped.
+
+To start off, various packages were attached using the `library()` function. These included `tmap` for mapping, `spData` to enable the "World" global spatial data, `RColorBrewer` for its colour palettes and `tidyverse` and `magrittr` for working with the data.
+
+```{r}
+# load packages
+library(spData)
+library(tmap)
+library(RColorBrewer)
+library(tidyverse)
+library(magrittr)
+```
+
+The desired datasets were brought into the working environment and joined together. The `data()` function was used to load the `World` dataset and the UNEP data was loaded from a CSV (comma-separated values) file using the `read_csv()` function, which had its missing values removed using `na_if()` function. They were then joined together using the `left_join()` function.
+
+```{r}
+# load data
+data("World")
+unep <- read_csv("unep_co2.csv")
+unep %<>% na_if(-9999) # change -9999 values to NA
+
+# join datasets
+emissions <- World %>%
+  left_join(unep, by = c("iso_a3" = "ISO_3_CODE"))
+```
+
+Two maps were then created to view the emission data. `tm_shape()` was used in conjunction with `tm_fill()` to produce a map with a colour scale representing the the difference in values for each country. The "jenks" style was chosen as it gave the best visual separation of countries into different categories. `tm_borders()` added borders to each country and `tm_graticules()` provided a coordinate grid, while `tm_layout()` allowed the legend and titles to be edited.
+
+```{r}
+# map of emissions for each country
+emissions %>%
+  tm_shape() +
+  tm_fill("Y_2011",
+          title = "Gigagrams (Gg)",
+          style = "jenks",
+          palette = "Blues") +
+  tm_borders(alpha=.3) +
+  tm_graticules() +
+  tm_layout(main.title = "Total CO2 Emissions by Country (2011)",
+            main.title.position = "center",
+            legend.bg.color = "white",
+            legend.bg.alpha = 0.7)
+```
+
+The first map was created to represent the total CO$_{2}$ emissions per country in gigragrams (Gg). Many larger and/or more densely populated countries had higher CO$_{2}$ emissions, such as China, Japan and the USA. Others who were less developed or more sparsely populated mostly fell into the lowest emission category, including much of Africa, Europe and South America. Interestingly, some countries were missing data, including South Sudan and Serbia.
+
+```{r}
+# map of emissions per capita for each country
+emissions <- emissions %>%
+  mutate(CO2_per_capita = Y_2011 / World$pop_est)
+
+emissions %>%
+  tm_shape() +
+  tm_fill("CO2_per_capita",
+          title = "Gigagrams (Gg)",
+          style = "jenks",
+          palette = "Blues") +
+  tm_borders(alpha=.3) +
+  tm_graticules() +
+  tm_layout(main.title = "Total CO2 Emissions Per Capita (2011)",
+          main.title.position = "center",
+          legend.bg.color = "white",
+          legend.bg.alpha = 0.7)
+```
+
+The second map showed total CO$_{2}$ emissions for each country per capita - total emissions divided by total population. This illustrated the change in measurement when population density is taken into account; China falls into a much lower category, whilst the United Arab Emirates is in a much higher one. Many of the countries falling into the highest categories were wealthier, oil-producing nations.
+
+A scatterplot was then produced using the `ggplot()` function in combination with `geom_point()`. `ylim()` set the limit of the y axis for better viewing, `scale_colour_brewer()` allowed a Brewer colour palette to be used and 'labs()` was used to include titles for the plot, axes and legend.
+
+```{r}
+# graph of emissions vs. GDP per capita 
+emissions %>%
+  ggplot(aes(x = CO2_per_capita,
+             y = gdp_cap_est,
+             colour = continent)) +
+  geom_point() +
+  ylim(0, 120000) +
+  scale_colour_brewer(palette="Set1") +
+  labs(x = "CO2 Emissions Per Capita (Gg)",
+       y = "GDP Per Capita",
+       title = "Total Emissions vs. GDP Per Capita (2011)",
+       colour = "Continent")
+```
+
+The graph visualised the difference in total emissions when compared to GDP per capita. The points illustrated a moderate relationship between the two variables when considered globally. However, viewing the continents in different colours show relationships between countries in a similar area, which may be of particular interest. For example, on average, European countries seem to have lower CO$_{2}$ emissions for their GDP per capita compared to Asian countries.

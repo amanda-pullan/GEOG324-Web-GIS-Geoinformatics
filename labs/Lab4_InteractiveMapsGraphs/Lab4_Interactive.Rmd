@@ -1,0 +1,255 @@
+---
+title: "GEOG324 Lab 4 - Amanda Pullan"
+output:
+  html_document:
+    df_print: paged
+---
+
+The focus of this exercise was to use data available through the UNEP (United Nations Emissions Programme) Geodata API (application programming interface) in conjunction with a global spatial dataset called "Natural Earth". Several variables were chosen from the UNEP data and interactive plots and maps were created to visualise their worldwide relationships.
+
+There were many packages used in this exercise; `rnaturalearth` and `rnaturalearthdata` provided the spatial data for mapping, whilst `tmap`, `sf` and `leaflet` in combination allowed for interactive maps to be produced. `httr` and `jsonlite` made interacting with the UNEP API relatively straightforward, whilst `tidyverse` provided tools to work with the data and plot it. Finally, `plotly` enabled the plots to become interactive and `RColorBrewer` included new colour palettes to use with them.
+
+```{r warning=FALSE, message=FALSE}
+# attach packages
+library(tmap) # enable mapping
+library(sf) # enable spatial features
+library(rnaturalearth) # provide global spatial data
+library(rnaturalearthdata) # provide global spatial data
+library(httr) # for working with http/ Internet data
+library(jsonlite) # for working with JSON
+library(plotly) # create interactive ggplots
+library(RColorBrewer) # enable new colour palettes
+library(leaflet) # enable interactive mapping
+library(tidyverse) # for working with datasets
+```
+
+### Acquiring, cleaning & joining the data
+
+To start off, the UNEP data was downloaded in full to find variables of interest. The `GET()` function pulled the data from the API, then `rawToChar()` and `fromJSON()` converted and mapped it to an R dataframe. `select()` was used to view only the name and ID of each column in the dataframe for easy searching and `ne_countries()` enabled the Natural Earth data to be loaded and saved as `world`.
+
+```{r}
+# # find all the UNEP variables to choose from
+# UNEP_variables_response <- GET("http://geodata.grid.unep.ch/api/variables/national")
+# UNEP_variables <- rawToChar(UNEP_variables_response$content) %>% fromJSON()
+# 
+# # find variables of interest from UNEP data
+# UNEP_variables %>% select(name, id)
+
+# load world polygons to allow for mapping
+world <- ne_countries(scale = "medium", returnclass = "sf")
+```
+
+Three variables were selected from the UNEP data for further exploration and loaded into the local environment. This was completed in the same fashion as above, using the `GET()`, `rawToChar()` and `fromJSON()` functions, resulting in several new dataframes. The 'names()` function was used to assign new labels to the columns in each dataframe.
+
+```{r}
+# extracting chosen UNEP variables
+
+#	Life Expectancy - 237
+# Human Development Index (HDI) - 1510
+#	Population Growth Rate - 696
+
+# UNEP life expectancy data
+unep_le_response <- GET("http://geodata.grid.unep.ch/api/countries/variables/237/years/1951:2011")
+unep_le <- rawToChar(unep_le_response$content) %>% fromJSON()
+
+# UNEP human development index (HDI) data
+unep_hdi_response <- GET("http://geodata.grid.unep.ch/api/countries/variables/1510/years/1951:2011")
+unep_hdi <- rawToChar(unep_hdi_response$content) %>% fromJSON()
+
+# UNEP population growth data
+unep_pg_response <- GET("http://geodata.grid.unep.ch/api/countries/variables/696/years/1951:2011")
+unep_pg <- rawToChar(unep_pg_response$content) %>% fromJSON()
+
+# updating column names
+names(unep_le) <- c("country", "year", "life_expectancy")
+names(unep_hdi) <- c("country","year","HDI")
+names(unep_pg) <- c("country","year","pop_growth")
+```
+
+The dataframes had their dimensions and variables reduced before being joined together and combined with the world spatial data. The `filter()` function was used to keep only observations where the year was 2010 and the `select()` function removed the `year` column. Then, `left_join()` was used to combine the dataframes into one, which was then joined onto the world dataset, with only columns of interest selected to keep.
+
+```{r}
+# filtering variables to a common year
+# selecting only the variables of interest
+
+# HDI dataframe with reduced dimensions
+unep_hdi2010 <- unep_hdi %>%
+  filter(year == 2010) %>%
+  select(country, HDI)
+
+# population growth dataframe with reduced dimensions
+unep_pg2010 <- unep_pg %>%
+  filter(year == 2010) %>%
+  select(country, pop_growth)
+
+# life expectancy dataframe with reduced dimensions
+unep_le2010 <- unep_le %>%
+  filter(year == 2010) %>%
+  select(country, life_expectancy)
+
+# combining UNEP data into single dataframe
+unep_data2010 <- unep_le2010 %>%
+  left_join(unep_hdi2010, by = c("country" = "country")) %>%
+  left_join(unep_pg2010, by = c("country" = "country"))
+
+# joining world and UNEP data
+world_data2010 <- world %>%
+  left_join(unep_data2010, by = c("iso_a2" = "country")) %>%
+  select(name_long, continent, HDI, life_expectancy,
+         pop_growth, income_grp, geometry)
+```
+
+### Creating an interactive map using the `tmap` package
+
+An interactive map was created to visualise the global HDI (Human Development Index), with selectable points that showed other information including country name, life expectancy and population growth. First, the names of each variable in the dataframe were edited to display nicely on the map. Then, `tm_shape()` was used in conjunction with `tm_fill()` to create a chloropleth map of HDI ratings, while `tm_borders()` added outlines and `tm_scale_bar()` provided a scale bar to the map. Finally, `tm_markers()` added the other variables as a selectable layer and `tmap_mode("view")` set the map to be viewed interactively.
+
+```{r}
+# updating column names for mapping
+world_map_data <- world_data2010
+names(world_map_data) <- c("Country", "Continent", "HDI", "Life Expectancy",
+                           "Population Growth", "Income Group", "geometry")
+
+# create world map of human development index (HDI)
+# include population growth & life expectancy as variables
+world_map <- world_map_data %>%
+  tm_shape() +
+  tm_fill("HDI",
+          title = "HDI (2010)",
+          palette = "Blues") +
+  tm_borders(alpha = 0.5) +
+  tm_scale_bar() +
+  tm_markers()
+
+# set to interactive viewing mode
+tmap_mode("view")
+world_map
+```
+
+The map illustrated areas of higher HDI in North America, Europe and Oceania, which likely reflects countries with greater income per capita. The lowest ratings were mostly in the African continent, which also had several countries with missing data. Many small islands, such as South Georgia and Bermuda, were also missing data.
+
+### Creating interactive graphs using `ggplotly`
+
+An interactive timeseries graph was created to view the change in population growth over time for several nations. The UNEP population growth data was filtered to only contain information for five selected nations and `ggplot()` was used with `geom_line()` to produce a graph that showed the trends over time. The titles were updated using `labs()` and the `ggplotly()` function was used to make the graph interactive.
+
+```{r}
+# find countries with most extreme values
+# unep_pg[order(unep_pg$pop_growth),]
+# unep_pg[order(-unep_pg$pop_growth),]
+
+# create timeseries graph of population growth
+popgrowth <- unep_pg %>%
+  filter(country %in% c("NZ", "AU", "AE", "QA", "NU")) %>%
+  ggplot(mapping = aes(x = year,
+                       y = pop_growth,
+                       col = country)) +
+  geom_line() +
+  labs(title = "Population Growth 1955-2010",
+       x = "Year",
+       y = "Population Growth",
+       col = "Place")
+
+# view graph interactively
+ggplotly(popgrowth)
+```
+The graph showed that New Zealand (NZ) and Australia (AU) sat relatively close, with neither falling outside a 1-3% growth rate. Several other countries that showed more extreme values had been added; the United Arab Emirates (AE) and Qatar (QA) both had a much higher overall growth rate, with recent peaks around 2005. Niue (NU) showed the opposite trend, with decades of population decline from 1965 until 2010.
+
+Next, a density plot of the overall life expectancy in 2010 for each continent was created and separated in two for easier viewing. `na_omit()` removed rows with missing data and `filter()` was used to select only some continents for each graph. `ggplot()` was combined with `geom_density()` to produce the density plot, titles were edited using `labs()` and the graphs were viewed interactively using `ggplotly()`. 
+
+
+```{r}
+# create density plots of worldwide life expectancy
+
+# density plot 1 - Africa, Asia, North America
+le2010_density1 <- world_data2010 %>%
+  na.omit() %>%
+  filter(continent %in% c("Africa", "Asia", "North America")) %>%
+  ggplot(mapping = aes(x = life_expectancy,
+                       fill = continent)) +
+  geom_density(alpha = 0.4) +
+  xlim(40, 90) +
+  ylim(0, 0.15) +
+  labs(title = "Distribution of Worldwide Life Expectancy (2010)",
+       x = "Life Expectancy (Years)",
+       y = "Density",
+       fill = "Continent")
+
+# density plot 2 - Europe, Oceania, South America
+le2010_density2 <- world_data2010 %>%
+  na.omit() %>%
+  filter(continent %in% c("Europe", "Oceania", "South America")) %>%
+  ggplot(mapping = aes(x = life_expectancy,
+                       fill = continent)) +
+  geom_density(alpha = 0.4) +
+  xlim(40, 90) +
+  ylim(0, 0.15) +
+  labs(title = "Distribution of Worldwide Life Expectancy (2010)",
+       x = "Life Expectancy (Years)",
+       y = "Density",
+       fill = "Continent")
+
+ggplotly(le2010_density1)
+ggplotly(le2010_density2)
+```
+
+The graphs showed that Europe had the overall greatest life expectancy at around 81 years, with North America next at 74 and South America not far behind at 73 years. Asia and Oceania had more spread with two smaller separated peaks each - 68 and 74 years for Asia, 70 and 81 years for Oceania. Africa fell clearly behind the rest with a main peak at 61 years.
+
+Then, two scatterplots were created to examine the relationships between HDI, life expectancy and population growth. Observations with missing data were first removed using the `na.omit()` function, before using `ggplot()` with the `geom_point()` function to produce the plots. `scale_color_brewer()` allowed one of the `RColorBrewer` palettes to be used and the titles were updates using `labs()`, before viewing the graphs interactively with `ggplotly()`.
+
+```{r}
+# create scatterplots for the different variables
+
+# plot of HDI vs. life expectancy
+hdi2010_scatter1 <- world_data2010 %>%
+  na.omit() %>%
+  ggplot(mapping = aes(x = HDI,
+                       y = life_expectancy,
+                       col = income_grp)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "Life Expectancy vs. Human Development Index 2010",
+       y = "Life Expectancy",
+       col = "Income Group")
+
+ggplotly(hdi2010_scatter1)
+```
+
+The first scatterplot showed life expectancy compared with HDI, which is separated into income groups. It showed a moderate to strong positive correlation between the first two variables; as the HDI increased, the life expectancy also increased. There also appeared to be a relationship between these two variables and income, with each group clustered in a similar area and higher values reflecting a higher income and vice versa.
+
+```{r}
+# plot of HDI vs. population growth
+hdi2010_scatter2 <- world_data2010 %>%
+  na.omit() %>%
+  ggplot(mapping = aes(x = HDI,
+                       y = pop_growth,
+                       col = income_grp)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "Population Growth vs. Human Development Index 2010",
+       y = "Population Growth",
+       col = "Income Group")
+
+ggplotly(hdi2010_scatter2)
+```
+The second scatterplot compared population growth to HDI, again separated into income groups. There seemed to be a weak to moderate negative correlation, where the population growth decreased as the HDI increased. There was also an income trend as well - overall, the lowest income group had the highest population growth and vice versa. However, there were several outliers to this trend, with much higher or lower growth rates than any group. This likely included places viewed on the earlier time series graph - the United Arab Emirates, Qatar and Niue.
+
+The final graph created was a boxplot showing the distribution of the HDI ratings for each continent. `na.omit()` and `filter()` were used to remove rows with missing data and sparsely populated continents (Antarctica and the "Seven seas"). `ggplot()` was used with `geom_boxplot()` to produce the graph, `labs()` was used to edit the titles and `theme(legend.position)` was used to remove the legend. Finally, the graph was displayed interactively using `ggplotly()`.
+
+```{r}
+# create boxplot of HDI for each income group
+hdi2010_box <- world_data2010 %>%
+  na.omit() %>%
+  filter(!(continent %in% c("Seven seas (open ocean)", "Antarctica"))) %>%
+  ggplot(mapping = aes(x = continent,
+                       y = HDI,
+                       fill = continent)) +
+  geom_boxplot() +
+  labs(title = "HDI Rating for Each Continent",
+       x = "Continent",
+       y = "HDI Rating") +
+  theme(legend.position = "none")
+
+ggplotly(hdi2010_box)
+```
+
+The boxplots showed a large difference in the values and spread between the HDI ratings for each continent. Europe sat above the others, with a minimum rating of 0.67 and a median of 0.84. North and South America were next with median ratings of 0.74 and 0.72 respectively and all three had ranges of 0.3 or smaller. Africa, Asia and Oceania each had a spread greater than 0.4, but while Asia and Oceania had median ratings of 0.71 and 0.67, Africa's only reached 0.47. 
+

@@ -1,0 +1,122 @@
+---
+title: "GEOG324 Lab 1 - Amanda Pullan"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+The idea of this exercise was to examine the variation in median age and population density for different area types in New Zealand. Census data from 2013 were used, which divides the population into meshblocks - each representing a single unit. The difference in values for the meshblocks were visualised in several graphs.
+
+To begin, the relevant packages and data were attached to the working environment. The `library()` function was used to load the tidyverse package, which enables useful tools for working with datasets. The census data were then loaded using the `read_csv()` function, which converts CSV files into local tables.
+
+```{r}
+library(tidyverse) # load tidyverse package
+
+# load meshblock datasets
+meshblock_data <- read_csv("meshblock-2013.csv")
+age_meshblock_data <- read_csv("age-by-meshblock-2013.csv")
+pop_meshblock_data <- read_csv("population-by-meshblock-2013.csv")
+```
+
+Then, the variables of interest were extracted from the tables. To see what relevant information was available, the `names()` function was used to show the title of each column in a table. The `select()` function was then used to choose particular columns from each table, which were assigned to new variables. This created new tables with reduced dimensions - one each for area, age and population.
+
+```{r}
+# look at the available columns
+names(meshblock_data)
+names(age_meshblock_data)
+names(pop_meshblock_data)
+
+# selecting columns of interest from datasets
+
+# land area in meshblocks (sq km) and type of area
+area_meshblock <- meshblock_data %>%
+  select(MeshblockNumber, LandAreaSQKM, UrbanAreaType) 
+
+# median age of residents in meshblocks
+age_meshblock <- age_meshblock_data %>%
+  select(MeshblockNumber, Age_UR_Median_2013)
+
+# population count in meshblocks
+pop_meshblock <- pop_meshblock_data %>%
+  select(MeshblockNumber, Population_Count_Usual_Resident_2013)
+```
+
+The next step was to join the tables, rename the variables and filter rows with missing data. Using the `MeshblockNumber` variable and the `left_join()` function, the three tables were combined into one `meshblock_stats` table. The titles of the table columns were updated by passing a vector of new, user-friendly names to the "names" function. Rows where data had not been published (shown by median age equal to -999) or had an area of zero were removed from the table using the `filter()` function with specified conditions.
+
+```{r}
+# joining tables
+meshblock_stats <- area_meshblock %>%
+  left_join(age_meshblock, by="MeshblockNumber") %>%
+  left_join(pop_meshblock, by="MeshblockNumber")
+
+# renaming columns
+names(meshblock_stats) <- c("meshblock", "area", "area_type", "median_age", "population")
+
+# filtering unwanted rows
+meshblock_stats <-  meshblock_stats %>%
+  filter(median_age > 17, area > 0)
+
+# view tidied table
+meshblock_stats
+```
+
+Finally, the meshblock data were graphed for comparison. The `ggplot()` function was used with `geom_point()` to create a scatterplot of median age and population by area type. As the plot was dense, the shape and colour of the points were edited to increase their contrast from each other. The y-axis limit was set to better view the area where the majority of the data lie and relevant titles for the plot, axes and legend were added.
+
+```{r}
+# vector of custom colours
+my_palette <- c("dodgerblue3", "red1", "darkorchid1", "green3", "goldenrod1")
+
+# create scatterplot
+meshblock_stats %>%
+  ggplot(aes(x = median_age,
+             y = population/area,
+             color = area_type)) +
+  geom_point(shape = 1) +
+  ylim(0, 25000) +
+  scale_color_manual(values = my_palette) +
+  labs(x = "Median Age",
+       y = "Population Density",
+       title = "Age vs. Population in Meshblocks",
+       color = "Area Type")
+```
+
+The scatterplot showed that the majority of the meshblocks fell into the Main Urban area type, which on average had a lower median age in places with higher population density. An exception to this was meshblocks in the 75-95 median age bracket, which may be due to urban retirement villages. For other area types, there didn't seem to be any relationship between the variables.
+
+The process used to create the following two boxplots followed a similar format. First, `ggplot()` was called with specified parameters for the axes and colour. The graph type was chosen by adding `geom_boxplot()` and the x-axis tick labels removed using `theme()`. The colours were adjusted to match the scatterplot and `labs()` was used to include titles for the plot, axes and legend.
+
+```{r}
+# create boxplots
+meshblock_stats %>%
+  ggplot(aes(x = area_type,
+             y = median_age,
+             fill = area_type)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_blank()) +
+  scale_fill_manual(values = my_palette) +
+  labs(x = "Area Type",
+       y = "Median Age",
+       title = "Median Age by Area Type",
+       fill = "Area Type")
+  
+```
+
+The first boxplot showed the median ages of the meshblocks in each area type. The median was reasonably lower for Main Urban areas (around 37), compared to other areas which all had medians over 40. All of the area types seemed to have a similar range of values and overall variation.
+
+```{r}
+# create boxplots
+meshblock_stats %>%
+  ggplot(aes(area_type,
+             population/area,
+             fill = area_type)) +
+  geom_boxplot() +
+  ylim(0, 10000) +
+  theme(axis.text.x = element_blank()) +
+    scale_fill_manual(values = my_palette) +
+  labs(x = "Area Type",
+       y = "population Density",
+       title = "Population by Area Type",
+       fill = "Area Type")
+```
+
+The second boxplot showed the population density of meshblocks in each area type. The results were as expected; urban areas had a higher overall population density than rural area types, with the Main Urban median around 2800, compared to the Rural (Incl. some Off Shore Islands) median of close to zero. The median, range and spread varied significantly between each area type. Main Urban areas had the greatest interquartile and overall range, while the interquartile range of Rural (Incl. some Off Shore Islands) was practically indiscernable from the median. 

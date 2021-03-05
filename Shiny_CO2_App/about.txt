@@ -1,0 +1,15 @@
+World Forestry Viewer
+This is an R Shiny app which demonstrates web queries to map and plot wordwide forestry and CO2 emission levels. The data used are provided by UNEP
+(United Nations Environmental Programme) and its partners in the GEO (Global Environmental Outlook) report. The template and certain functionality
+have been built upon from code contained in the NZ Earthquake Viewer app developed by Matthew Wilson in 2018.
+
+Data providers
+All data presented are copyright of the respective owners and they are gratefully acknowledged:
+	Geodata, retrieved from the United Nations Environmental Data Explorer.
+
+App development
+Part of the functionality presented is copyright of the respective owner and is gratefully acknowledged:
+	NZ Earthquake Viewer, created by Matthew Wilson (2018) and retrieved from GEOG324 Learn page in 2020.
+
+App licence
+© Copyright 2020 Amanda Pullan, Heng Sun, Conor Cussin and Josh Clark

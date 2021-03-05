@@ -1,0 +1,159 @@
+---
+title: "GEOG324 Lab 6"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Load packages
+```{r message=FALSE}
+library(readxl)
+library(tidyverse)
+library(sf)
+library(raster)
+library(tmap)
+library(ggplot2)
+library(plotly)
+library(viridis)
+```
+
+
+### Load data
+```{r warning=FALSE}
+load("depth_stack.RData")
+hydros <- read_excel("hydros.xlsx")
+webmercator <- "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0
++k=1 +units=m +nadgrids=@null +wktext +no_defs"
+
+# Exercise 1
+elevation <- raster("carlisle_LiDAR_15m.tif")
+map <- tm_shape(elevation, name = "Elevation") +
+  tm_raster(alpha = 0.2, palette = terrain.colors(10),
+            style = "cont", title = "Elevation (m)")
+
+maxDepth <- max(depth_stack, na.rm = TRUE)
+maxTime <- raster::which.max(depth_stack)
+
+crs(maxDepth) <- CRS('+init=EPSG:27700')
+crs(maxTime) <- CRS('+init=EPSG:27700')
+maxDepth <- projectRaster(maxDepth, crs = webmercator)
+maxTime <- projectRaster(maxTime, crs = webmercator)
+
+
+# Exercise 2
+load("channel_depth.RData")
+hydros$channel_depth <- channel_depth
+
+
+# Exercise 3
+mean_depth <- cellStats(depth_stack, stat = "mean")
+max_depth <- cellStats(depth_stack, stat = "max")
+load("total_area.RData")
+flood_df <- tibble(mean_depth, max_depth, total_area)
+flood_df$date <- hydros$DateTime
+
+
+# Exercise 4
+load("buildings_flooded.RData")
+hydros$buildings_flooded <- buildings_flooded
+```
+
+
+### Exercise 1 - Mapping max flood depth & time it occurred
+```{r}
+tmap_mode("view")
+
+map +
+  tm_shape(maxDepth) +
+  tm_raster(palette = "Blues", alpha = 0.5) +
+  tm_shape(maxTime) +
+  tm_raster(palette = "Reds", alpha = 0.5)
+```
+
+
+### Exercise 2 - Channel depth line plot
+```{r}
+depth_line <- hydros %>%
+  ggplot(mapping = aes(x = DateTime,
+                       y = channel_depth)) +
+  geom_line(col = "blue") +
+  labs(title = "Channel Boundary Depth",
+       x = "Time",
+       y = "Channel Depth (m)")
+
+ggplotly(depth_line)
+```
+
+
+### Exercise 2 - Channel depth scatterplot
+```{r}
+depth_scatter <- hydros %>%
+  mutate(total = (Caldew + Petteril + Eden)) %>%
+  ggplot(mapping = aes(x = total,
+                       y = channel_depth,
+                       col = DateTime)) +
+  geom_point() +
+  labs(title = "Total River Inflow vs. Channel Boundary Depth",
+       x = "Total Inflow",
+       y = "Channel Depth",
+       col = "Date")
+
+ggplotly(depth_scatter)
+```
+
+
+### Exercise 3 - Mean depth line plot
+```{r}
+mean_line <- flood_df %>%
+  ggplot(mapping = aes(x = date,
+                       y = mean_depth)) +
+  geom_line(col = "blue") +
+  labs(title = "Mean Flood Depth Over Time",
+       x = "Time",
+       y = "Mean Depth (m)")
+
+ggplotly(mean_line)
+```
+
+
+### Exercise 3 - Max depth line plot
+```{r}
+max_line <- flood_df %>%
+  ggplot(mapping = aes(x = date,
+                       y = max_depth)) +
+  geom_line(col = "blue") +
+  labs(title = "Max Flood Depth Over Time",
+       x = "Time",
+       y = "Max Depth (m)")
+
+ggplotly(max_line)
+```
+
+
+### Exercise 3 - Total flooded area line plot
+```{r}
+flood_line <- flood_df %>%
+  mutate(total_area_km = total_area / 1000000) %>%
+  ggplot(mapping = aes(x = date,
+                       y = total_area_km)) +
+  geom_line(col = "blue") +
+  labs(title = "Total Area Flooded Over Time",
+       x = "Time",
+       y = "Flooded Area (km²)")
+
+ggplotly(flood_line)
+```
+
+
+### Exercise 4 - Buildings line plot
+```{r}
+buildings_line <- hydros %>%
+  ggplot(mapping = aes(x = DateTime,
+                       y = buildings_flooded)) +
+  geom_line(col = "blue") +
+  labs(title = "Amount of Buildings Flooded Over Time",
+       x = "Time",
+       y = "Flooded Buildings")
+
+ggplotly(buildings_line)
+```

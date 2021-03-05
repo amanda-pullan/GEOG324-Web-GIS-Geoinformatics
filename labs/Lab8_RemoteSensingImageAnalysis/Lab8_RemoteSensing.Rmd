@@ -1,0 +1,475 @@
+---
+title: "GEOG324 Lab 8"
+author: "Amanda - Apu20 - 99178082"
+date: "12/10/2020"
+output: html_document
+---
+
+## Lab 8 - Remote Sensing Image Analysis
+
+In this lab, multispectral images taken by the Sentinel-2 satellite at different times of year were compared using a variety of plots. This involved examining the reflectance in several bands for different types of vegetation covering the land. The changes over the year seemed to be largely due to seasonal shifts.
+
+
+### Load packages
+```{r}
+suppressPackageStartupMessages({
+library(tidyverse) # tools for working with datasets
+library(lubridate) # enable datetime functions
+library(sf) # enable spatial features
+library(sp) # provides classes and methods for spatial data
+library(tmap) # enable mapping
+library(ggplot2) # create ggplots
+library(plotly) # make ggplots interactive
+library(raster) # enable features for raster data
+library(terra) # new beta version of raster package
+library(reshape2) # includes melt function for dataframes
+})
+```
+
+
+### Setting up
+
+To get started, images were loaded and the image information was assigned easy-to-read names using two for-loops. LCDB (Land Cover Database) data representing different land covers was loaded and reprojected using functions from the `sf` package. This was used to produce a bounding box to crop the multispectral images, speeding up processing. 
+
+```{r}
+# Create image metadata
+img <- list(
+            # band number/ name
+            band.name = c("B02" = "Blue", 
+                          "B03" = "Green",
+                          "B04" = "Red", 
+                          "B05" = "Vegetation red edge 1", 	
+                          "B06" = "Vegetation red edge 2", 	
+                          "B07" = "Vegetation red edge 3", 	
+                          "B8A" = "Narrow NIR",
+                          "B11" = "SWIR 1",	
+                          "B12" = "SWIR 2" ),
+            
+            # band central wavelength
+            band.wv = c("Blue" = 492.1,
+                        "Green" = 559,
+                        "Red" = 664.9,
+                        "Vegetation red edge 1" = 703.8,
+                        "Vegetation red edge 2" = 739.1,
+                        "Vegetation red edge 3" = 779.7,
+                        "Narrow NIR" = 864,
+                        "SWIR 1" = 1610.4,
+                        "SWIR 2" = 2185.7),
+            
+            # image name/ file id
+            ids = c("Oct2019" = "T59GPM_20191006T222539",
+                    "Mar2020" = "T59GPM_20200304T222539",
+                    "Jun2020" = "T59GPM_20200612T222549"),
+            
+            # image acquisition date/ time
+            date = c(as_datetime("20191006T222539"),
+                     as_datetime("20200304T222539"),
+                     as_datetime("20200612T222549"))
+)
+
+# --------------------------------------------------------------------------------------------------------
+
+# Load images & rename bands
+
+# load all three images as class SpatRaster
+for (i in names(img$ids)) img[[i]]$bands <- rast(paste0(img$ids[[i]],"_",names(img$band.name),"_20m.jp2"))
+
+# shorten image layer names
+for (i in names(img$ids)) names(img[[i]]$bands) <- names(img$band.name)
+
+# --------------------------------------------------------------------------------------------------------
+
+# Crop the images for faster processing
+
+lcdb <- st_read("lcdb-v50-chch.gpkg") %>% 
+  st_transform(crs(img$Oct2019$bands)) # Reproject to the same CRS as the image data
+
+# Construct an SpatExtent object using ext() and the outputs of st_bbox()
+e <- c(st_bbox(lcdb)$xmin, st_bbox(lcdb)$xmax, st_bbox(lcdb)$ymin, st_bbox(lcdb)$ymax)  %>% ext()
+
+img$Oct2019$crop <- crop(img$Oct2019$bands, e)
+img$Mar2020$crop <- crop(img$Mar2020$bands, e)
+img$Jun2020$crop <- crop(img$Jun2020$bands, e)
+
+# --------------------------------------------------------------------------------------------------------
+```
+
+
+### Plot band 5 (vegetation red edge 1) for each image
+
+In this comparison, a single band from each multispectral image was plotted using the `plot()` function from the `raster` package. The reflectance in this band (vegetation red edge 1) was largely varied between each image. October had the highest reflectance, which was expected due to the new green growth in Spring. March had the lowest reflectance, likely indicating the shift to red and yellow tones of Autumn.
+
+```{r}
+# Plot each image using band 5
+plot(img$Oct2019$crop$B06, main = "Oct2019: Vegetation Red Edge", col = gray(0:100 / 100))
+plot(img$Mar2020$crop$B06, main = "Mar2020: Vegetation Red Edge", col = gray(0:100 / 100))
+plot(img$Jun2020$crop$B06, main = "Jun2020: Vegetation Red Edge", col = gray(0:100 / 100))
+```
+
+
+### Sample points from different land cover types
+
+Several land cover types from Canterbury were sampled to compare their values at the different times of year (October, March and June). All related to vegetation? First, `filter()` was used to extract the desired land cover. Then, `sample_n()` was used to obtain a random selection of observations.
+
+The pixel values corresponding to the sampled points from the LCDB were extracted from the cropped Sentinel images using the `extract()` function from the `terra` package.
+
+```{r}
+# make results reproducible
+set.seed(1995)
+
+# sample exotic grass land cover
+lcdb.sample.exoticgrass <- lcdb %>%
+  filter(Class_2018 == 40) %>%
+  sample_n(10, replace = TRUE)
+
+# sample indigenous forest land cover
+lcdb.sample.indigenousforest <- lcdb %>%
+  filter(Class_2018 == 69) %>%
+  sample_n(10, replace = TRUE)
+
+# sample short rotation crop land cover
+lcdb.sample.shortrotationcrop <- lcdb %>%
+  filter(Class_2018 == 30) %>%
+  sample_n(10, replace = TRUE)
+
+# --------------------------------------------------------------------------------------------------------
+
+# extract pixel values from sampled points
+
+# exotic grass
+exoticgrass.vals.oct2019 <- terra::extract(img$Oct2019$crop,
+                                           vect(lcdb.sample.exoticgrass))
+exoticgrass.vals.mar2020 <- terra::extract(img$Mar2020$crop,
+                                           vect(lcdb.sample.exoticgrass))
+exoticgrass.vals.jun2020 <- terra::extract(img$Jun2020$crop,
+                                           vect(lcdb.sample.exoticgrass))
+
+# indigenous forest
+indigenousforest.vals.oct2019 <- terra::extract(img$Oct2019$crop,
+                                            vect(lcdb.sample.indigenousforest))
+indigenousforest.vals.mar2020 <- terra::extract(img$Mar2020$crop,
+                                            vect(lcdb.sample.indigenousforest))
+indigenousforest.vals.jun2020 <- terra::extract(img$Jun2020$crop,
+                                            vect(lcdb.sample.indigenousforest))
+
+# short rotation cropland
+shortrotationcrop.vals.oct2019 <- terra::extract(img$Oct2019$crop,
+                                            vect(lcdb.sample.shortrotationcrop))
+shortrotationcrop.vals.mar2020 <- terra::extract(img$Mar2020$crop,
+                                            vect(lcdb.sample.shortrotationcrop))
+shortrotationcrop.vals.jun2020 <- terra::extract(img$Jun2020$crop,
+                                            vect(lcdb.sample.shortrotationcrop))
+```
+
+
+### Put pixel values into dataframe
+
+Dataframes of each land cover type were then created for easy plotting. Each dataframe contained the sampled pixel values from each of the 3 multispectral images. Then, `melt()` from the `reshape2` package was used to switch the dataframe to long format, enabling each date on the same graph to be easily plotted in a different colour.
+
+```{r}
+# calculate the mean for land cover spectra and assign to dataframe
+
+# exotic grass dataframe
+spectra.exoticgrass <- data.frame(wavelength = img$band.wv,
+                                  Oct2019 = apply(exoticgrass.vals.oct2019,2,mean)[2:10],
+                                  Mar2020 = apply(exoticgrass.vals.mar2020,2,mean)[2:10],
+                                  Jun2020 = apply(exoticgrass.vals.jun2020,2,mean)[2:10])
+
+
+# indigenous forest dataframe
+spectra.indigenousforest <- data.frame(wavelength = img$band.wv,
+                                  Oct2019 = apply(indigenousforest.vals.oct2019,2,mean)[2:10],
+                                  Mar2020 = apply(indigenousforest.vals.mar2020,2,mean)[2:10],
+                                  Jun2020 = apply(indigenousforest.vals.jun2020,2,mean)[2:10])
+
+# short rotation cropland dataframe
+spectra.shortrotationcrop <- data.frame(wavelength = img$band.wv,
+                                  Oct2019 = apply(shortrotationcrop.vals.oct2019,2,mean)[2:10],
+                                  Mar2020 = apply(shortrotationcrop.vals.mar2020,2,mean)[2:10],
+                                  Jun2020 = apply(shortrotationcrop.vals.jun2020,2,mean)[2:10])
+
+
+# melt dataframe to long format
+spectra.exoticgrass.melt <- melt(spectra.exoticgrass, id = "wavelength")
+spectra.indigenousforest.melt <- melt(spectra.indigenousforest, id = "wavelength")
+spectra.shortrotationcrop.melt <- melt(spectra.shortrotationcrop, id = "wavelength")
+```
+
+
+### Plot the values for each land cover type
+
+To create a line plot for each land cover type, `ggplot()` was used with `geom_line()`.
+
+The spectral reflectance for exotic grass was relatively consistent throughout the year, showing the same drop in the red edge. There was a slight overall loss in reflectance from October to March and from March to June. For the indigenous forest class, the reflectance in October and March were almost exactly the same with a big red edge. June showed a large decrease in reflectance but a similar shape. The short rotation cropland was quite different, featuring a clear red edge in October, but with a large shift in March and June. The early to mid-year reflectance more closely resembled soil than that of green vegetation. 
+
+```{r}
+# exotic grass line plot
+exgras_line <- spectra.exoticgrass.melt %>% 
+  ggplot(aes(x = wavelength,
+             y = value,
+             col = variable)) +
+  geom_line() +
+  labs(title = "Spectral Reflectance for Exotic Grass",
+       col = "Date",
+       x = "Wavelength (nm)",
+       y = "Reflectance x10<sup>4</sup>")
+
+
+# indigenous forest line plot
+inforest_line <- spectra.indigenousforest.melt %>% 
+  ggplot(aes(x = wavelength,
+             y = value,
+             col = variable)) +
+  geom_line() +
+  labs(title = "Spectral Reflectance for Indigenous Forest",
+       col = "Date",
+       x = "Wavelength (nm)",
+       y = "Reflectance x10<sup>4</sup>")
+
+
+# short rotation cropland line plot
+srcrop_line <- spectra.shortrotationcrop.melt %>% 
+  ggplot(aes(x = wavelength,
+             y = value,
+             col = variable)) +
+  geom_line() +
+  labs(title = "Spectral Reflectance for Short Rotation Cropland",
+       col = "Date",
+       x = "Wavelength (nm)",
+       y = "Reflectance x10<sup>4</sup>")
+
+# render interactive plots
+ggplotly(exgras_line)
+ggplotly(inforest_line)
+ggplotly(srcrop_line)
+```
+
+
+### Create tibbles for each land cover & bind together
+
+In this step, `as_tibble()` from the `dplyr` package was used to convert the landcover values to a tibble dataframe. The land cover types were then joined together using `rbind()`, creating a dataframe for each date. This allowed each land cover type to be easily allocated to a different colour on the scatterplot.
+
+```{r}
+# convert matrix data to tibbles
+
+# October 2019
+exoticgrass.oct2019.tbl <- as_tibble(exoticgrass.vals.oct2019)
+exoticgrass.oct2019.tbl$source <- "Exotic Grass"
+
+indigenousforest.oct2019.tbl <- as_tibble(indigenousforest.vals.oct2019)
+indigenousforest.oct2019.tbl$source <- "Indigenous Forest"
+
+shortrotationcrop.oct2019.tbl <- as_tibble(shortrotationcrop.vals.oct2019)
+shortrotationcrop.oct2019.tbl$source <- "Short Rotation Cropland"
+
+
+# March 2020
+exoticgrass.mar2020.tbl <- as_tibble(exoticgrass.vals.mar2020)
+exoticgrass.mar2020.tbl$source <- "Exotic Grass"
+
+indigenousforest.mar2020.tbl <- as_tibble(indigenousforest.vals.mar2020)
+indigenousforest.mar2020.tbl$source <- "Indigenous Forest"
+
+shortrotationcrop.mar2020.tbl <- as_tibble(shortrotationcrop.vals.mar2020)
+shortrotationcrop.mar2020.tbl$source <- "Short Rotation Cropland"
+
+
+# June 2020
+exoticgrass.jun2020.tbl <- as_tibble(exoticgrass.vals.jun2020)
+exoticgrass.jun2020.tbl$source <- "Exotic Grass"
+
+indigenousforest.jun2020.tbl <- as_tibble(indigenousforest.vals.jun2020)
+indigenousforest.jun2020.tbl$source <- "Indigenous Forest"
+
+shortrotationcrop.jun2020.tbl <- as_tibble(shortrotationcrop.vals.jun2020)
+shortrotationcrop.jun2020.tbl$source <- "Short Rotation Cropland"
+
+
+# --------------------------------------------------------------------------------
+
+# bind dataframes together for plotting
+
+# October 2019
+spectra.vals.oct2019 <- rbind(exoticgrass.oct2019.tbl,
+                              indigenousforest.oct2019.tbl,
+                              shortrotationcrop.oct2019.tbl)
+
+# March 2020
+spectra.vals.mar2020 <- rbind(exoticgrass.mar2020.tbl,
+                              indigenousforest.mar2020.tbl,
+                              shortrotationcrop.mar2020.tbl)
+
+# June 2020
+spectra.vals.jun2020 <- rbind(exoticgrass.jun2020.tbl,
+                              indigenousforest.jun2020.tbl,
+                              shortrotationcrop.jun2020.tbl)
+
+```
+
+
+### Scatterplot of land covers for each image
+
+Scatterplots containing the 3 land cover types were created for each date using `ggplot()` with `geom_point()`. The bands chosen (4 - red, 7 - near infrared) represented the red edge shift in reflectance.
+
+Exotic grass had a generally high reflectance in near infrared and low in red, but there was a lot of variation within the class. In June there was a slight shift to lower near infrared reflectance, which is probably due to the lower intensity of winter grazing in agriculture. The indigenous forest class had much less internal variation than exotic grass. It had an overall low to medium reflectance in near infrared and low in red. Near infrared reflectance slightly increased in October (Spring green vegetation) and red increased in March (leaves turning red/orange in Autumn). Short rotation cropland had a large amount of variation within the class. The relationship between near infrared and red reflectance looked slightly linear in March and June, with an increase in red reflectance in March (Autumn). This shifted in October (Spring) with an overall increase in near infrared reflectance and decrease in red reflectance.
+
+
+```{r}
+# create scatterplots
+
+# October 2019
+oct19_scatter <- spectra.vals.oct2019 %>%
+  ggplot(aes(x = B04, y = B07, col = source)) +
+  geom_point(alpha = 0.25) +
+  labs(title = "Reflectance of Land Cover Types (Oct 2019)",
+       x = "Reflectance in Red (B04) x 10<sup>4</sup>",
+       y = "Reflectance in Near infrared (B07) x 10<sup>4</sup>",
+       col = "Land Cover")
+
+# March 2020
+mar20_scatter <- spectra.vals.mar2020 %>%
+  ggplot(aes(x = B04, y = B07, col = source)) +
+  geom_point(alpha = 0.25) +
+  labs(title = "Reflectance of Land Cover Types (Mar 2020)",
+       x = "Reflectance in Red (B04) x 10<sup>4</sup>",
+       y = "Reflectance in Near infrared (B07) x 10<sup>4</sup>",
+       col = "Land Cover")
+
+# June 2020
+jun20_scatter <- spectra.vals.jun2020 %>%
+  ggplot(aes(x = B04, y = B07, col = source)) +
+  geom_point(alpha = 0.25) +
+  labs(title = "Reflectance of Land Cover Types (Jun 2020)",
+       x = "Reflectance in Red (B04) x 10<sup>4</sup>",
+       y = "Reflectance in Near infrared (B07) x 10<sup>4</sup>",
+       col = "Land Cover")
+
+# render interactive plots
+ggplotly(oct19_scatter)
+ggplotly(mar20_scatter)
+ggplotly(jun20_scatter)
+```
+
+
+### Calculate NDVI for different land cover types from each image
+
+For this comparison, a function `ndvi` was created to measure the NDVI (Normalised Difference Vegetation Index) for each land cover type in each image. A dataframe was then created for the NDVI of each land cover type. This meant that density plots created to show the NDVI could easily be coloured by date.
+
+```{r}
+# create NDVI function
+ndvi <- function(NIR, RED) {
+  n <- (NIR - RED) / (NIR + RED) 
+  return(n)
+}
+
+# --------------------------------------------------------------------------------
+
+# apply NDVI function to each date & land cover type 
+
+# exotic grass
+exoticgrass.ndvi.oct2019 <- ndvi(exoticgrass.vals.oct2019[, "B07"],
+                                 exoticgrass.vals.oct2019[, "B04"])
+exoticgrass.ndvi.mar2020 <- ndvi(exoticgrass.vals.mar2020[, "B07"],
+                                 exoticgrass.vals.mar2020[, "B04"])
+exoticgrass.ndvi.jun2020 <- ndvi(exoticgrass.vals.jun2020[, "B07"],
+                                 exoticgrass.vals.jun2020[, "B04"])
+
+# exotic forest
+indigenousforest.ndvi.oct2019 <- ndvi(indigenousforest.vals.oct2019[, "B07"],
+                                      indigenousforest.vals.oct2019[, "B04"])
+indigenousforest.ndvi.mar2020 <- ndvi(indigenousforest.vals.mar2020[, "B07"],
+                                      indigenousforest.vals.mar2020[, "B04"])
+indigenousforest.ndvi.jun2020 <- ndvi(indigenousforest.vals.jun2020[, "B07"],
+                                      indigenousforest.vals.jun2020[, "B04"])
+
+# short rotation cropland
+shortrotationcrop.ndvi.oct2019 <- ndvi(shortrotationcrop.vals.oct2019[, "B07"],
+                                       shortrotationcrop.vals.oct2019[, "B04"])
+shortrotationcrop.ndvi.mar2020 <- ndvi(shortrotationcrop.vals.mar2020[, "B07"],
+                                       shortrotationcrop.vals.mar2020[, "B04"])
+shortrotationcrop.ndvi.jun2020 <- ndvi(shortrotationcrop.vals.jun2020[, "B07"],
+                                       shortrotationcrop.vals.jun2020[, "B04"])
+
+# --------------------------------------------------------------------------------
+
+# create NDVI dataframe for each land cover type
+
+# exotic grass
+ndvi.exoticgrass <- data.frame(exoticgrass.ndvi.oct2019,
+                                exoticgrass.ndvi.mar2020,
+                                exoticgrass.ndvi.jun2020)
+names(ndvi.exoticgrass) <- c("Oct 2019", "Mar 2020", "Jun 2020")
+
+
+# exotic grass
+ndvi.indigenousforest <- data.frame(indigenousforest.ndvi.oct2019,
+                                    indigenousforest.ndvi.mar2020,
+                                    indigenousforest.ndvi.jun2020)
+names(ndvi.indigenousforest) <- c("Oct 2019", "Mar 2020", "Jun 2020")
+
+
+# short rotation cropland
+ndvi.shortrotationcrop <- data.frame(shortrotationcrop.ndvi.oct2019,
+                                     shortrotationcrop.ndvi.mar2020,
+                                     shortrotationcrop.ndvi.jun2020)
+names(ndvi.shortrotationcrop) <- c("Oct 2019", "Mar 2020", "Jun 2020")
+```
+
+
+### Density plots of NDVI values
+
+Density plots were created to visualise the difference in vegetation health for each land cover type over different times of the year. The dataframes were swtiched to long format using `melt()` and plotted using `ggplot()` with `geom_density()`.
+
+The NDVI for the exotic grass class was relatively consistent, with a left skew throughout the year. This peaked in October and dipped slightly in the colder months of March and June. This is likely because agricultural pasture needs to be healthy all year around to feed grazing animals. Indigenous forests had high values of NDVI all year around, with an overall drop in June and slight shift in March. Permanent forest likely has stability in health but is impacted by changes in season. In contrast, the NDVI for short rotation croplands significantly varied depending on the time of year. October peaked with high values close around 0.9, spreading out to a wide range in June and largely dropping in March to a median of 0.24. This represents the time in Spring when crops are growing, compared to Autumn and Winter when they have been harvested and the soil is bare.
+
+```{r message=FALSE}
+# exotic grass
+exgrass_density <- melt(ndvi.exoticgrass) %>%
+  ggplot(aes(x = value, fill = variable)) +
+  geom_density(alpha = 0.25) +
+  labs(title = "Density of NDVI Values (Exotic Grass)",
+       x = "NDVI Value",
+       y = "Density",
+       fill = "Date")
+
+# indigenous forest
+inforest_density <- melt(ndvi.indigenousforest) %>%
+  ggplot(aes(x = value, fill = variable)) +
+  geom_density(alpha = 0.25) +
+  labs(title = "Density of NDVI Values (Indigenous Forest)",
+       x = "NDVI Value",
+       y = "Density",
+       fill = "Date")
+
+# short rotation cropland
+srcrop_density <- melt(ndvi.shortrotationcrop) %>%
+  ggplot(aes(x = value, fill = variable)) +
+  geom_density(alpha = 0.25) +
+  labs(title = "Density of NDVI Values (Short Rotation Cropland)",
+       x = "NDVI Value",
+       y = "Density",
+       fill = "Date")
+
+# render interactive plots
+ggplotly(exgrass_density)
+ggplotly(inforest_density)
+ggplotly(srcrop_density)
+```
+
+
+### NDVI composite image
+
+```{r}
+img$Oct2019$ndvi <- ndvi(img$Oct2019$crop$B07, img$Oct2019$crop$B04)
+img$Mar2020$ndvi <- ndvi(img$Mar2020$crop$B07, img$Mar2020$crop$B04)
+img$Jun2020$ndvi <- ndvi(img$Jun2020$crop$B07, img$Jun2020$crop$B04)
+
+plotRGB(c(img$Oct2019$ndvi, img$Mar2020$ndvi, img$Jun2020$ndvi), 
+        axes = TRUE, stretch = "lin", main = "NDVI Composite")
+
+```
+
+
+
+
+

@@ -1,0 +1,322 @@
+---
+title: "GEOG324 Lab 7 - Amanda Pullan"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Lab 7 - Landslide Analysis
+
+The idea in this lab was to predict landslide susceptibility in an area based on existing landslide locations and a set of predictor variables. This was done by fitting a GLM (generalised linear model) to the data and performing a spatial cross-validation to account for the effect of spatial correlation.
+
+### Load packages
+```{r}
+suppressPackageStartupMessages({
+library(tidyverse) # tools for working with datasets
+library(sf) # enable spatial features
+library(tmap) # enable mapping
+library(ggplot2) # create ggplots
+library(plotly) # create interactive ggplots
+library(raster) # enable features for raster data
+library(RSAGA) # enable access to functions from SAGA GIS
+library(mlr)
+library(RColorBrewer) # enable new colour palettes
+})
+
+# find rsaga
+env <- rsaga.env()
+```
+
+
+### Getting started
+```{r warning=FALSE}
+# load required spatial data
+nz.regions <- st_read("regional-council-2020-clipped-generalised.gpkg")
+SRTM <- raster("SRTM_MERIT_NZTM2193.tif")
+
+# clip data to Canterbury region
+nz.canterbury <- nz.regions %>%
+  filter(REGC2020_V1_00_NAME == "Canterbury Region")
+SRTM.canterbury <- SRTM %>% crop(nz.canterbury) %>% mask(nz.canterbury)
+
+# load landslide data to sf object
+gns.landslides <- read_csv("GNS_LandslideDatabase.csv") %>%
+  st_as_sf(coords = c("X Co-ordinate", "Y Co-ordinate"), crs = 4326) %>%
+  st_transform(crs = st_crs(nz.canterbury))
+
+# extract Canterbury landslide data
+gns.landslides.canterbury <- gns.landslides[nz.canterbury, ]
+
+# runif(): random numbers from the uniform distribution
+set.seed(0)
+x <- runif(9999, st_bbox(gns.landslides.canterbury)$xmin, st_bbox(gns.landslides.canterbury)$xmax)
+y <- runif(9999, st_bbox(gns.landslides.canterbury)$ymin, st_bbox(gns.landslides.canterbury)$ymax)
+xy <- data.frame(Lon = x,Lat = y) %>%
+  st_as_sf(coords = c("Lon","Lat"), crs = st_crs(nz.canterbury))
+
+# extract only samples from Canterbury
+xy <- xy[nz.canterbury, ]
+
+# create buffer around observed landslides
+gns.landslides.canterbury.buffer <- st_buffer(gns.landslides.canterbury, dist = 2000) %>%
+  st_union()
+
+# remove non-landslide locations
+xy <- st_difference(xy,gns.landslides.canterbury.buffer)
+
+# sample to get same number of non-landslides as landslides
+xy <- xy[1:nrow(gns.landslides.canterbury), ]
+
+# Drop attributes, add a lslpts column, set value as TRUE
+lsl.cant <- gns.landslides.canterbury %>%
+  dplyr::select(geometry) %>%
+  mutate(lslpts = TRUE)
+
+# Add lslpts column to the xy sample locations, set as FALSE
+xy <- xy %>% mutate(lslpts = FALSE)
+
+# Bind together in one dataset
+lsl.cant <- rbind(lsl.cant,xy)
+
+# Extract the x/ y from the geometry, assign to x, y columns
+lsl.cant.coords <- do.call(rbind, st_geometry(lsl.cant)) %>%
+  as_tibble() %>% setNames(c("x","y"))
+lsl.cant$x <- lsl.cant.coords$x
+lsl.cant$y <- lsl.cant.coords$y
+
+# Keep as an sf
+lsl.cant.sf <- lsl.cant
+
+# And drop the geometry from lsl.cant: the result is a non-spatial tibble
+st_geometry(lsl.cant) <- NULL
+```
+
+
+### Elevation export for predictor variables creation
+```{r}
+# Create header list:
+SRTM_SAGA <- list()
+SRTM_SAGA$header <- list()
+SRTM_SAGA$header$ncols <- ncol(SRTM.canterbury)
+SRTM_SAGA$header$nrows <- nrow(SRTM.canterbury)
+SRTM_SAGA$header$xllcorner <- xmin(SRTM.canterbury)
+SRTM_SAGA$header$yllcorner <- ymin(SRTM.canterbury)
+SRTM_SAGA$header$cellsize <- res(SRTM.canterbury)[1]
+SRTM_SAGA$header$nodata_value <- -9999
+SRTM_SAGA$header$xllcenter <- xmin(SRTM.canterbury) + res(SRTM.canterbury)[1]/2
+SRTM_SAGA$header$yllcenter <- ymin(SRTM.canterbury) + res(SRTM.canterbury)[1]/2
+SRTM_SAGA$header$proj4string <- as.character(crs(SRTM.canterbury))
+
+# create matrix of data
+elv <- as.matrix(SRTM.canterbury)
+elv[is.na(elv)] <- -9999
+SRTM_SAGA$data <- as.matrix(SRTM.canterbury)
+write.sgrd(data = SRTM_SAGA, file = "cant_elev.sgrd", header = SRTM_SAGA$header, env = env)
+```
+
+
+### Task 1 - Predictor variables
+
+In this task, the variables used to help predict the landslide susceptibility of an area were derived using functions from the `rsaga` package. These included slope, plan and profile slope curvature (using the `rsaga.slope.asp.curv()` function) and catchment area (using the `rsaga.topdown.processing()` function). The catchment area values were recalculated in log base 10 using `rsaga.grid.calculus()`. 
+
+```{r warning=FALSE}
+# calculate slope in degrees
+rsaga.slope.asp.curv(in.dem = "cant_elev.sgrd", out.slope = "slope",
+                     method = "maxslope", unit.slope = "degrees",
+                     env = env)
+
+# calculate curvature in radians/ m
+rsaga.slope.asp.curv(in.dem = "cant_elev.sgrd", out.cplan = "cplan",
+                     out.cprof = "cprof", env = env)
+
+# calculate catchment area 
+rsaga.topdown.processing(in.dem = "cant_elev.sgrd", out.carea = "carea",
+                         method = "mfd", env = env)
+
+# calculate log base 10 of catchment area
+rsaga.grid.calculus(in.grids = "carea", out.grid = "log10_carea",
+                    formula = ~ log(a), env = env)
+```
+
+
+The new variable rasters, along with the elevation raster, were loaded into a single raster stack. The stack had its coordinate reference system set to match the existing landslide data. Then, the values of each variable at points where landslides had occurred could be extracted using the `extract()` function from the `raster` package. These observations were then joined onto the landslide dataframe, using `cbind()`.  
+
+```{r}
+# load layers into raster stack and reassign CRS
+ta <- stack("slope.sdat","cplan.sdat", "cprof.sdat", "cant_elev.sdat", "log10_carea.sdat")
+crs(ta) <- crs(lsl.cant.sf)
+
+# Extract cell values at each landslide location
+lsl.cant.sf.extract <- raster::extract(ta, lsl.cant.sf, along = TRUE) %>% as.data.frame()
+
+# combine with landslide data frame
+lsl.cant <- cbind(lsl.cant, lsl.cant.sf.extract)
+```
+
+
+### Predictor variables & landslide locations map
+
+A map was created to visualise the predictor variables in comparison to the locations of the landslide data using functions from the `tmap` package. The hillshade was calculated to help visualise elevation and set as the base map layer, with the predictor variables and landslide locations added as subsequent layers. Using an interactive leaflet map allowed for each one of these layers to be turned on or off.
+
+```{r message=FALSE}
+# set map mode to interactive viewing
+tmap_mode("view")
+
+# create hillshade variable 
+hs = hillShade(ta$slope * pi / 180, terrain(ta$cant_elev, opt = "aspect"))
+
+# create tmap object using code from lab
+map <- tm_shape(hs, name = "Hillshade") +                 # add the hillshade
+	tm_raster(alpha = 0.5, palette = gray(0:100 / 100),
+	          n = 100, legend.show = FALSE) +
+	tm_shape(ta$cant_elev, name = "Elevation") +            # add the elevation
+	tm_raster(alpha = 0.5, palette = terrain.colors(10),
+	          title = "Elevation:", group = "Elevation") +
+	tm_shape(ta$slope, name = "Slope") +                    # add the slope
+	tm_raster(alpha = 0.5, style = "quantile",
+	          palette = "-RdYlGn", title = "Slope:") +
+	tm_shape(ta$cplan, name = "Cplan") +                    # add the plan slope curvature
+	tm_raster(alpha = 0.5, style = "quantile",
+	          palette = "Spectral", title = "Curvature (plan):",
+	          group = "Curvature (plan)") +
+	tm_shape(ta$cprof, name = "Cprofile") +                 # add the profile slope curvature
+	tm_raster(alpha = 0.5, style = "quantile",
+	          palette = "Spectral", title = "Curvature (profile):",
+	          group = "Curvature (profile)") +
+	tm_shape(lsl.cant.sf, name = "Landslide data") +        # add the landslide data
+	tm_bubbles("lslpts", size = 0.075, palette = "-RdYlBu",
+	           title.col = "Landslide: ") 
+
+# default view only showing slope
+map.lf <- tmap_leaflet(map) %>%
+  leaflet::hideGroup(c("Elevation","Curvature (plan)","Curvature (profile)"))
+
+# view map
+map.lf
+```
+
+
+### Task 2 - Fit binomial GLM
+
+In this task, a binomial GLM was created using the `glm()` function from the `mlr` package. Slope, profile and plan slope curvature, elevation and catchment area were used as the predictor variables and the landslide locations were set as the response variable. Then, `predict()` from the `raster` package was used to generate a raster containing the predicted landslide susceptibility of the area based on the model.
+
+```{r}
+# create GLM model predicting landslide susceptibility
+fit <- glm(lslpts ~ slope + cplan + cprof + cant_elev + log10_carea,
+  family = binomial(),
+  data = lsl.cant)
+
+# view summary of GLM
+summary(fit)
+
+# create raster of predicted susceptibility
+pred <- raster::predict(ta, model = fit, type = "response")
+```
+
+To assess the GLM's performance at accurately classifying the data, the AUC (area under the ROC curve) was calculated using the `auc()` function from the `pROC` package. The result of 0.7783 showed a reasonably good fit. However, this model did not account for spatial correlation in the data and so its estimates were likely to be biased.
+
+```{r}
+# calculate AUC to assess model performance
+pROC::auc(pROC::roc(lsl.cant$lslpts, fitted(fit)))
+```
+
+
+### Map of predicted landslide susceptibility
+
+Another `leaflet` map was created using `tmap` functions to visualise the predicted landslide susceptibility. Hillshade was used again as a base map layer, with the susceptibility and landslide locations added as additional layers. 
+
+```{r message=FALSE}
+# create tmap using predictions from the GLM model
+tm_shape(hs, name = "Hillshade") +
+	tm_raster(alpha = 0.5, palette = gray(0:100 / 100), n = 100, legend.show = FALSE) +
+	tm_shape(pred, name = "Susceptibilty") +
+	tm_raster(alpha = 0.5, palette = "YlOrRd", title = "Susceptibility:", style = "quantile") +
+	tm_shape(lsl.cant.sf, name = "Landslide data") +
+	tm_bubbles("lslpts", size = 0.075, palette = "-RdYlBu", title.col = "Landslide: ") 
+```
+
+
+### Task 3 - Spatial cross-validation
+
+In the final task, a spatial cross-validation was performed to minimise the effect of spatial correlation on the AUC. Step 1 of this process was to create a new dataframe containing only the predictor variables. Then, a binary classification task was created using the `makeClassifTask()` function from the `mlr` package. The new dataframe provided the set of predictor variables, with landslide locations used as the response variable and the coordinates specified to match.
+
+```{r message=FALSE}
+# Step 1: define the task
+
+# extract predictor variables to new dataframe
+data <- dplyr::select(lsl.cant, -x, -y)
+
+# create task - binary classification
+task <- makeClassifTask(data = data, target = "lslpts",
+  positive = "TRUE", coordinates = lsl.cant.coords)
+```
+
+
+For step 2, a learner object was created using the `makeLearner()` function from the `mlr` package. The classification method was set to binomial to match the GLM. In step 3, the `mlr` function `makeResampleDesc()` was used to define the resampling method. In this case, spatial cross-validation was chosen, using 5 folds with 100 repetitions. By leaving a different fraction of the sample data out at every repition, it helps to reduce bias in the model.
+
+```{r}
+# Step 2: create the learner
+lrn <- makeLearner(cl = "classif.binomial", link = "logit",
+                   predict.type = "prob", fix.factors.prediction = TRUE)
+
+# Step 3: define the resampling approach
+perf_level = makeResampleDesc(method = "SpRepCV", folds = 5, reps = 100)
+```
+
+Step 4 of the process was to run the spatial cross-validation to calculate the AUC, using `resample()` from the `mlr` package. This used the created task, learner and resampling objects as arguments and provided a measurement with the bias in the model accounted for. The new averaged AUC of 0.6264009 showed the model provided a moderate fit to the data.
+
+```{r}
+# Step 4: run the realisations
+set.seed(0)
+sp_cv <- mlr::resample(learner = lrn, task = task,
+                      resampling = perf_level,
+                      measures = mlr::auc)
+```
+
+
+### Plot of cross-validated AUC
+
+Finally, a density plot was created to visualise the AUC calculated for each iteration of the spatial cross-validation. The most common value of around 0.52 was not much better than random. However, the remaining data was skewed to the left, indicating higher values of AUC were more frequent than lower values. 
+
+```{r}
+# create density plot of AUC measurements
+plot <- sp_cv$measures.test %>%
+  ggplot(mapping = aes(x = auc)) +
+  geom_density(alpha = 0.3, fill = "blue")
+
+# view plot interactively
+ggplotly(plot)
+```
+
+Overall, the end result showed that the model provided a moderate predictive ability when spatial correlation was accounted for, leaving room for improvement. The summary output of the GLM shows statistically insignificant p-values for the plan slope curvature and catchment area variables, indicating the model may benefit by removing these from the set of predictors.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
